@@ -1,0 +1,19 @@
+# артефакты сборки
+amber.exe
+amber_new.exe
+res/amber_res.o
+*.exe
+*.o
+*.obj
+
+# локальные данные/настройки
+amber.ini
+folders.idx
+folders.idx.tmp
+run.log
+
+# собранные релизы/архивы
+release/amber.exe
+release/Amber_Commander_*.zip
+release/portable/
+release/source/
