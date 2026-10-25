@@ -1,10 +1,13 @@
-# артефакты сборки
-amber.exe
-amber_new.exe
-res/amber_res.o
+# Сборка
 *.exe
 *.o
 *.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+build/
+release/
 
 # локальные данные/настройки
 amber.ini
