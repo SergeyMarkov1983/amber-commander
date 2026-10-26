@@ -305,7 +305,9 @@ Report 'C1 F11 размеры (полосы)' ($bar -gt 500) "полосы px=$b
 Stop-App $p $d
 
 # ---------- F2: глобальный поиск (синтетический индекс) ----------
-$d = New-Env $null @("$script:ED\Тест Папка")
+# folderIndexRefresh=0: без фоновой пересборки — тест детерминированно работает
+# на синтетическом индексе (пересборка по умолчанию могла бы его перезаписать).
+$d = New-Env "[main]`r`nfolderIndexRefresh=0`r`n" @("$script:ED\Тест Папка")
 $p = Start-App $d
 Start-Sleep -Seconds 2
 $h = $p.MainWindowHandle
@@ -404,7 +406,9 @@ Report 'A2 восстановление из ini' ($pb.B -eq 128 -and $wrr.Left 
 Stop-App $p $d
 
 # ---------- I1: память/CPU ----------
-$d = New-Env $null @("$script:ED\Тест Папка")
+# folderIndexRefresh=0: замер «простоя» без фоновой пересборки индекса — она
+# теперь включена по умолчанию и идёт при каждом запуске (даёт CPU/память).
+$d = New-Env "[main]`r`nfolderIndexRefresh=0`r`n" @("$script:ED\Тест Папка")
 $p = Start-App $d
 Start-Sleep -Seconds 3
 $mem = (Get-Process -Id $p.Id).PrivateMemorySize64

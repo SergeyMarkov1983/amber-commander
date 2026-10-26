@@ -51,4 +51,7 @@ private:
     std::wstring dragSourceName;
     POINT dragStart{};
     bool rbtnDragging = false;
+    ULONGLONG idxFrame = 0;       // кадр анимации индикатора индексации (throttle)
+    bool idxBusy = false;         // идёт ли индексация в прошлый тик таймера
+    ULONGLONG idxDoneUntil = 0;   // до какого момента показывать подтверждение
 };

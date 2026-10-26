@@ -8,6 +8,8 @@ struct Config {
     bool confirmDelete = true;
     bool confirmOverwrite = true;
     bool showHidden = true;
+    // актуализировать глобальный индекс каталогов (folders.idx) при каждом запуске
+    bool folderIndexRefresh = true;
     std::wstring fontFace = L"Segoe UI Variable Text";
     int fontSizePx = 12;
     // геометрия окна (winX = -1 — не сохранялась, ставить по центру)

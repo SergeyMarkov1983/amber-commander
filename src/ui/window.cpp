@@ -5,10 +5,17 @@
 #include "dialogs.h"
 #include "pathutil.h"
 #include "shellmenu.h"
+#include "core/folderidx.h"
 #include <shlobj.h>
 #include <dwmapi.h>
 
 static const wchar_t* kMainClass = L"AmberMainWindow";
+
+// Линейная интерполяция цвета (для «едва заметного» серого индикатора).
+static D2D1_COLOR_F Mix(const D2D1_COLOR_F& a, const D2D1_COLOR_F& b, float t) {
+    return D2D1::ColorF(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t,
+                        a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t);
+}
 
 bool MainWindow::Create(App* a) {
     app = a;
@@ -245,6 +252,20 @@ void MainWindow::OnPaint(HDC hdc, const RECT& rcPaint) {
     if (GetTickCount64() < app->statusUntil) {
         renderer.Text(app->statusText, { W * 0.3f, cy + 3, W * 0.7f, cy + cmdH - 3 }, pal.accent,
                       true, true, false);
+    }
+    // Едва заметный серый индикатор фоновой индексации глобального поиска
+    // («индексация поиска» с бегущими точками); после успешного завершения — на
+    // несколько секунд подтверждение «индекс поиска обновлён» тем же стилем.
+    {
+        D2D1_RECT_F rr = { W - 340.0f, cy + 3, W - 12.0f, cy + cmdH - 3 };
+        D2D1_COLOR_F dim = Mix(pal.cmdLineBg, pal.dimText, 0.45f);
+        if (FolderIndexBusy()) {
+            int dots = 1 + (int)((GetTickCount64() / 400) % 3);
+            std::wstring s = L"индексация поиска" + std::wstring((size_t)dots, L'.');
+            renderer.Text(s, rr, dim, true, true, true);
+        } else if (idxDoneUntil && GetTickCount64() < idxDoneUntil) {
+            renderer.Text(L"индекс поиска обновлён", rr, dim, true, true, true);
+        }
     }
 
     float ky = H - keybarH;
@@ -689,11 +710,34 @@ LRESULT CALLBACK MainWindow::Proc(HWND h, UINT m, WPARAM w, LPARAM l) {
         // убираем не-клиентскую рамку (белая полоса сверху) — рамку рисуем сами
         if (w) return 0;
         return DefWindowProcW(h, m, w, l);
-    case WM_TIMER:
-        // живой индикатор скана размеров: перерисовка, пока идёт подсчёт
-        if (wnd->app->panels[0]->sizeLoading || wnd->app->panels[1]->sizeLoading)
+    case WM_TIMER: {
+        // живой индикатор скана размеров и фоновой индексации: перерисовка
+        bool sizeLoading = wnd->app->panels[0]->sizeLoading || wnd->app->panels[1]->sizeLoading;
+        bool idxBusy = FolderIndexBusy();
+        // завершение индексации (busy→idle): при успехе — подтверждение на ~4 с
+        if (wnd->idxBusy && !idxBusy) {
+            if (FolderIndexBuildSucceeded())
+                wnd->idxDoneUntil = GetTickCount64() + 4000;
             wnd->Redraw();
+        }
+        wnd->idxBusy = idxBusy;
+        if (sizeLoading) {
+            wnd->Redraw();
+        } else if (idxBusy) {
+            // анимация точек — перерисовка только при смене кадра (раз в ~400 мс)
+            ULONGLONG frame = GetTickCount64() / 400;
+            if (frame != wnd->idxFrame) {
+                wnd->idxFrame = frame;
+                wnd->Redraw();
+            }
+        } else if (wnd->idxDoneUntil) {
+            if (GetTickCount64() >= wnd->idxDoneUntil) {
+                wnd->idxDoneUntil = 0;   // убрать подтверждение
+                wnd->Redraw();
+            }
+        }
         return 0;
+    }
     case WM_ACTIVATE:
         // собственная рамка фокуса: синяя, только когда окно неактивно
         wnd->hasFocus = LOWORD(w) != WA_INACTIVE;

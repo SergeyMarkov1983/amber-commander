@@ -91,21 +91,36 @@ struct Mapping {
     HANDLE map = nullptr;
     const unsigned char* base = nullptr;
     uint64_t size = 0;
-    ~Mapping() {
-        if (base) UnmapViewOfFile((void*)base);
-        if (map) CloseHandle(map);
-        if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+    void Close() {
+        if (base) { UnmapViewOfFile((void*)base); base = nullptr; }
+        if (map) { CloseHandle(map); map = nullptr; }
+        if (file != INVALID_HANDLE_VALUE) { CloseHandle(file); file = INVALID_HANDLE_VALUE; }
+        size = 0;
     }
+    ~Mapping() { Close(); }
 };
 
 std::mutex g_m;
 std::atomic<bool> g_ready{ false };
 std::atomic<bool> g_busy{ false };
 std::atomic<bool> g_cancelBuild{ false };
+std::atomic<bool> g_buildOk{ false };   // последняя пересборка завершилась успешно
 uint64_t g_count = 0;
 uint64_t g_size = 0;                      // размер отображения (для защиты границ)
 const unsigned char* g_base = nullptr;   // общая часть отображения
 const uint64_t* g_offsets = nullptr;
+Mapping g_map;                            // владеет дескрипторами отображения
+
+// Снять отображение и обнулить глобальные указатели/размеры.
+// Вызывается под g_m перед подменой файла: Windows не даёт заменить mapped-файл,
+// пока он остаётся отображённым (MoveFileExW вернёт «файл уже используется»).
+void UnmapIndex() {
+    g_map.Close();
+    g_base = nullptr;
+    g_offsets = nullptr;
+    g_count = 0;
+    g_size = 0;
+}
 
 // Открыть индекс и наложить на память. Возвращает true при успехе.
 bool MapIndex() {
@@ -144,18 +159,12 @@ bool MapIndex() {
         return false;
     }
     // храним дескрипторы глобально (живут до конца процесса)
-    static Mapping s;
-    if (s.base) {
-        UnmapViewOfFile((void*)s.base);
-        CloseHandle(s.map);
-        CloseHandle(s.file);
-    }
-    s.file = f;
-    s.map = m;
-    s.base = b;
-    s.size = (uint64_t)sz.QuadPart;
-    memcpy(&g_count, b + 8, 8);
-    g_size = s.size;
+    g_map.Close();
+    g_map.file = f;
+    g_map.map = m;
+    g_map.base = b;
+    g_map.size = (uint64_t)sz.QuadPart;
+    g_size = g_map.size;
     g_base = b;
     g_offsets = (const uint64_t*)(b + 16);
     return true;
@@ -200,6 +209,7 @@ bool ValidateIndex() {
 // Сборка индекса: все фиксированные NTFS-диски (MFT) + запасной обход.
 void BuildThread() {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
+    g_buildOk = false;
     g_busy = true;
     std::vector<std::wstring> all;
     {
@@ -238,9 +248,10 @@ void BuildThread() {
         if (c) return c < 0;
         return WcsICmp(a.c_str(), b.c_str()) < 0;
     });
-    // запись файла
+    // запись во временный файл (подмена — ниже, после снятия отображения)
+    std::wstring tmp = IndexPath() + L".tmp";
+    bool haveTmp = false;
     {
-        std::wstring tmp = IndexPath() + L".tmp";
         HANDLE f = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                                FILE_ATTRIBUTE_NORMAL, nullptr);
         if (f != INVALID_HANDLE_VALUE) {
@@ -278,23 +289,53 @@ void BuildThread() {
             WriteFile(f, offTab.data(), (DWORD)offTab.size(), &wr, nullptr);
             WriteFile(f, entries.data(), (DWORD)entries.size(), &wr, nullptr);
             CloseHandle(f);
-            MoveFileExW(tmp.c_str(), IndexPath().c_str(),
-                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+            haveTmp = true;
         }
     }
-    if (!g_cancelBuild.load()) {
+    if (g_cancelBuild.load()) {
+        if (haveTmp) DeleteFileW(tmp.c_str());
+        g_busy = false;
+        return;
+    }
+    // 1) Снять отображение старого индекса: Windows не даёт заменить mapped-файл,
+    //    пока он остаётся отображённым (MoveFileExW вернёт «файл уже используется»).
+    {
         std::lock_guard<std::mutex> g(g_m);
-        if (MapIndex() && ValidateIndex()) g_ready = true;
+        g_ready = false;
+        UnmapIndex();
+    }
+    // 2) Подмена файла.
+    bool wrote = haveTmp && MoveFileExW(tmp.c_str(), IndexPath().c_str(),
+                                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+    // 3) Восстановление: при успехе — новый индекс; при неудаче — старый (если он есть).
+    {
+        std::lock_guard<std::mutex> g(g_m);
+        if (wrote && MapIndex() && ValidateIndex()) {
+            g_ready = true;
+            g_buildOk = true;
+        } else {
+            if (haveTmp) DeleteFileW(tmp.c_str());
+            if (MapIndex() && ValidateIndex()) {
+                g_ready = true;
+                g_buildOk = false;
+            } else {
+                g_ready = false;
+                g_buildOk = false;
+            }
+        }
     }
     g_busy = false;
 }
 
 } // namespace
 
-void StartFolderIndexBuild() {
+void StartFolderIndexBuild(bool refreshOnStart) {
     static std::atomic<bool> started{ false };
     if (started.exchange(true)) return;
-    // индекс уже свежий — просто накладываем на память
+    // Сначала пробуем наложить существующий индекс — глобальный поиск работает
+    // сразу, даже если ниже запустится фоновая пересборка (актуализация).
+    bool haveIndex = false;
+    bool fresh = false;
     {
         WIN32_FILE_ATTRIBUTE_DATA fad{};
         std::wstring ip = IndexPath();
@@ -308,17 +349,22 @@ void StartFolderIndexBuild() {
             now.HighPart = ft.dwHighDateTime;
             uint64_t age = now.QuadPart > last.QuadPart ? now.QuadPart - last.QuadPart : 0;
             const uint64_t kWeek = 7ull * 24 * 3600 * 10000000;
+            fresh = age < kWeek;
             {
                 std::lock_guard<std::mutex> g(g_m);
-                if (MapIndex() && age < kWeek && ValidateIndex()) {
+                if (MapIndex() && ValidateIndex()) {
+                    haveIndex = true;
                     g_ready = true;
-                    return;
                 }
             }
         }
     }
-    g_cancelBuild = false;
-    std::thread(BuildThread).detach();
+    // Фоновая пересборка: при включённой опции — при каждом запуске (актуализация),
+    // иначе — только если индекса нет или он старше недели.
+    if (refreshOnStart || !haveIndex || !fresh) {
+        g_cancelBuild = false;
+        std::thread(BuildThread).detach();
+    }
 }
 
 bool FolderIndexReady() {
@@ -327,6 +373,10 @@ bool FolderIndexReady() {
 
 bool FolderIndexBusy() {
     return g_busy.load();
+}
+
+bool FolderIndexBuildSucceeded() {
+    return g_buildOk.load();
 }
 
 size_t FolderIndexQuery(const std::wstring& prefix, std::vector<std::wstring>& out,

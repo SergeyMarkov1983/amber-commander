@@ -50,6 +50,7 @@ bool LoadConfig(Config& c, const std::wstring& iniPath) {
     c.confirmDelete = GetPrivateProfileIntW(L"main", L"confirmDelete", 1, iniPath.c_str()) != 0;
     c.confirmOverwrite = GetPrivateProfileIntW(L"main", L"confirmOverwrite", 1, iniPath.c_str()) != 0;
     c.showHidden = GetPrivateProfileIntW(L"main", L"showHidden", 1, iniPath.c_str()) != 0;
+    c.folderIndexRefresh = GetPrivateProfileIntW(L"main", L"folderIndexRefresh", 1, iniPath.c_str()) != 0;
     GetPrivateProfileStringW(L"main", L"fontFace", L"Segoe UI Variable Text", buf, 1024,
                              iniPath.c_str());
     c.fontFace = buf;
@@ -79,6 +80,7 @@ bool SaveConfig(const Config& c, const std::wstring& iniPath) {
     WritePrivateProfileStringW(L"main", L"confirmDelete", c.confirmDelete ? L"1" : L"0", iniPath.c_str());
     WritePrivateProfileStringW(L"main", L"confirmOverwrite", c.confirmOverwrite ? L"1" : L"0", iniPath.c_str());
     WritePrivateProfileStringW(L"main", L"showHidden", c.showHidden ? L"1" : L"0", iniPath.c_str());
+    WritePrivateProfileStringW(L"main", L"folderIndexRefresh", c.folderIndexRefresh ? L"1" : L"0", iniPath.c_str());
     WritePrivateProfileStringW(L"main", L"fontFace", c.fontFace.c_str(), iniPath.c_str());
     wchar_t fb[16];
     std::swprintf(fb, 16, L"%d", c.fontSizePx);

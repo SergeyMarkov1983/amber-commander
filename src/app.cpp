@@ -776,7 +776,7 @@ bool App::Run() {
     panels[0]->SetPath(cfg->leftDir.empty() ? L"C:\\" : cfg->leftDir);
     panels[1]->SetPath(cfg->rightDir.empty() ? L"C:\\" : cfg->rightDir);
     RefreshDrives();
-    StartFolderIndexBuild();   // фоновая сборка глобального индекса каталогов
+    StartFolderIndexBuild(cfg->folderIndexRefresh);   // фоновая сборка/актуализация индекса каталогов
 
     // восстановление геометрии окна (если она была сохранена и монитор на месте)
     if (cfg->winX != -1 && cfg->winY != -1) {

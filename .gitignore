@@ -20,3 +20,4 @@ release/amber.exe
 release/Amber_Commander_*.zip
 release/portable/
 release/source/
+.kitcache/
